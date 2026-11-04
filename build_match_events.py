@@ -10,14 +10,17 @@ JSON_PATH = (
     / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
 )
 
+# --- SOGLIE E PARAMETRI DI FILTRAGGIO HIGHLIGHTS ---
 MAX_CAR_DISTANCE = 300.0   # distanza massima auto-palla per un tocco
 HIT_LAG_FRAMES = 45        # finestra per cercare HitTeamNum dopo l'impatto
 GOAL_LINE_Y = 5120.0       # linea di porta
 GOAL_HALF_WIDTH = 893.0    # semi-larghezza della porta
-SHOT_MARGIN = 300.0        # tolleranza laterale per considerare un tiro
-SHOT_MIN_SPEED = 1000.0    # velocità minima della palla dopo il tocco
-ASSIST_MAX_FRAMES = 300    # un assist deve precedere il gol di al massimo ~14 s
-SAVE_WINDOW_FRAMES = 90    # finestra per attribuire una parata
+
+# Soglie restrittive per tiri ed eventi salienti:
+SHOT_MARGIN = 150.0        # Tolleranza laterale più stretta (solo tiri nello specchio)
+SHOT_MIN_SPEED = 1400.0    # Velocità minima aumentata per prendere solo tiri potenti
+ASSIST_MAX_FRAMES = 300    # Un assist deve precedere il gol di al massimo ~14 s
+SAVE_WINDOW_FRAMES = 90    # Finestra per attribuire una parata
 
 with JSON_PATH.open("r", encoding="utf-8") as f:
     replay = json.load(f)
@@ -41,7 +44,7 @@ for frame in replay["Frames"]:
                 pri_names[ch] = n
 pri_team = {pri: name_team.get(n) for pri, n in pri_names.items()}
 
-# --- dati di telemetria ----------------------------------------
+# --- Dati di telemetria ----------------------------------------
 ball = pd.read_csv("ball_telemetry.csv")
 cars = pd.read_csv("car_telemetry.csv")
 cars = cars[cars["pri"] != -1].copy()
@@ -117,25 +120,26 @@ for _, r in impacts.iterrows():
 
 touches = pd.DataFrame(touches)
 
-# --- 2. TIRI (proiezione verso la porta avversaria) -------------
+# --- 2. TIRI RESTRITTIVI (SOLO EVENTI SIGNIFICATIVI) ------------
 def is_shot(t):
     if t["status"] == "incerto" or np.isnan(t["vy"]):
         return False
     target_y = GOAL_LINE_Y if t["team"] == 0 else -GOAL_LINE_Y
-    # Team 0 attacca verso +Y, team 1 verso -Y (verificato sui gol).
     toward = (t["vy"] > 0) if t["team"] == 0 else (t["vy"] < 0)
     speed = np.sqrt(t["vx"] ** 2 + t["vy"] ** 2 + t["vz"] ** 2)
+    
+    # Filtro velocità minima e traiettoria
     if not toward or speed < SHOT_MIN_SPEED:
         return False
     secs = (target_y - t["by"]) / t["vy"]
-    if secs <= 0 or secs > 6:
+    if secs <= 0 or secs > 5: # Ridotto a massimo 5 secondi prima di arrivare in porta
         return False
     x_at_goal = t["bx"] + t["vx"] * secs
     return abs(x_at_goal) <= GOAL_HALF_WIDTH + SHOT_MARGIN
 
 touches["is_shot"] = touches.apply(is_shot, axis=1)
 
-# --- 3. GOL, ASSIST --------------------------------------------
+# --- 3. GOL, ASSIST, PARATE E HIGHLIGHTS ------------------------
 events = []
 goals = sorted(props["Goals"], key=lambda g: g["frame"])
 frame_time = {i: fr.get("Time") for i, fr in enumerate(replay["Frames"])}
@@ -151,10 +155,10 @@ for g in goals:
             "player": g["PlayerName"],
             "team": g["PlayerTeam"],
             "status": "da_replay",
+            "is_highlight": True
         }
     )
-    # Assist: ultimo tocco di un COMPAGNO prima del tocco finale dello scorer,
-    # entro ASSIST_MAX_FRAMES, senza tocchi avversari in mezzo.
+    # Assist: ultimo tocco di un compagno prima del gol
     before = touches[(touches["frame"] <= gf)
                      & (touches["frame"] >= gf - ASSIST_MAX_FRAMES)]
     before = before[before["status"] != "incerto"].sort_values("frame")
@@ -176,10 +180,11 @@ for g in goals:
                 "player": p["player"],
                 "team": p["team"],
                 "status": "stimato",
+                "is_highlight": True
             }
         )
 
-# --- 4. PARATE (da TimelineKeyframes) --------------------------
+# Parate
 saves_found = {}
 for t in replay["TimelineKeyframes"]:
     if "Save" not in t["Type"]:
@@ -201,9 +206,11 @@ for t in replay["TimelineKeyframes"]:
             "player": player,
             "team": team,
             "status": "stimato" if player else "giocatore_ignoto",
+            "is_highlight": True
         }
     )
 
+# Tiri qualificati come Highlights
 shots = touches[touches["is_shot"]]
 for _, s in shots.iterrows():
     events.append(
@@ -214,50 +221,37 @@ for _, s in shots.iterrows():
             "player": s["player"],
             "team": s["team"],
             "status": "stimato",
+            "is_highlight": True
         }
     )
 
+# Tocchi ordinari (salvati per telemetria ma marcati is_highlight = False)
 for _, t in touches.iterrows():
-    events.append(
-        {
-            "frame": int(t["frame"]),
-            "time": t["time"],
-            "type": "touch",
-            "player": t["player"],
-            "team": t["team"],
-            "status": t["status"],
-        }
-    )
+    if not t["is_shot"]:
+        events.append(
+            {
+                "frame": int(t["frame"]),
+                "time": t["time"],
+                "type": "touch",
+                "player": t["player"],
+                "team": t["team"],
+                "status": t["status"],
+                "is_highlight": False
+            }
+        )
 
 ev = pd.DataFrame(events).sort_values(["frame", "type"]).reset_index(drop=True)
 ev.to_csv("match_events.csv", index=False)
 
-# --- CONFRONTO CON PlayerStats ---------------------------------
-print("\n========== TOCCHI ==========")
-print(touches["status"].value_counts().to_string())
+# --- CREAZIONE FILE RESTRITTIVO SOLO PER HIGHLIGHTS ---
+highlights_only = ev[ev["is_highlight"] == True].copy()
+highlights_only.to_csv("highlight_events.csv", index=False)
 
-print("\n========== CONFRONTO CON PlayerStats DEL REPLAY ==========")
-rows = []
-shots_found = shots.groupby("player").size().to_dict()
-goals_found = {}
-for g in goals:
-    goals_found[g["PlayerName"]] = goals_found.get(g["PlayerName"], 0) + 1
-for p in props["PlayerStats"]:
-    n = p["Name"]
-    rows.append(
-        {
-            "giocatore": n,
-            "gol_replay": p["Goals"],
-            "gol_trovati": goals_found.get(n, 0),
-            "assist_replay": p["Assists"],
-            "assist_stimati": assists_found.get(n, 0),
-            "parate_replay": p["Saves"],
-            "parate_stimate": saves_found.get(n, 0),
-            "tiri_replay": p["Shots"],
-            "tiri_stimati": shots_found.get(n, 0),
-        }
-    )
-print(pd.DataFrame(rows).to_string(index=False))
+print("\n========== RESOCONTO EVENTI ==========")
+print(f"Totale eventi registrati: {len(ev)}")
+print(f"Totale HIGHLIGHTS (Gol, Parate, Assist, Tiri forti): {len(highlights_only)}")
 
-print("\nFile creato: match_events.csv")
+print("\nFile creati:")
+print(" - match_events.csv (Tutti gli eventi per le statistiche)")
+print(" - highlight_events.csv (Solo gli highlights salienti da montare)")
 print("========== COMPLETATO ==========")
