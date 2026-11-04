@@ -1,0 +1,14 @@
+frame,time,type,player,team,status,is_highlight,score
+674,42.499653,goal,Fratel,1,da_replay,True,4000.0
+1179,66.21247,save,Hype_sith,0,stimato,True,2500.0
+1999,103.68441,goal,Ace,0,da_replay,True,4000.0
+2581,131.92604,goal,Patrontex,1,da_replay,True,4000.0
+3161,163.41399,goal,Patrontex,1,da_replay,True,4000.0
+4571,228.50563,goal,Patrontex,1,da_replay,True,4000.0
+5181,256.76245,save,Ace,0,stimato,True,2500.0
+5755,282.9909,goal,Hype_sith,0,da_replay,True,4000.0
+6534,324.7715,goal,Hype_sith,0,da_replay,True,4000.0
+6895,346.93924,goal,Patrontex,1,da_replay,True,4000.0
+7421,372.63257,goal,Hype_sith,0,da_replay,True,4000.0
+7962,399.02786,goal,Ace,0,da_replay,True,4000.0
+8506,428.90503,goal,Fratel,1,da_replay,True,4000.0
