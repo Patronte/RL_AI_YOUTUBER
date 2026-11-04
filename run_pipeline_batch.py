@@ -2,6 +2,7 @@ import os
 import json
 import subprocess
 from pathlib import Path
+import pandas as pd
 
 # Definiamo le cartelle principali
 OBS_DIR = Path(r"C:\Users\kazam\Videos\Rocket Video")
@@ -10,16 +11,32 @@ OUTPUT_BASE_DIR.mkdir(parents=True, exist_ok=True)
 
 print("=== AVVIO PIPELINE AUTOMATICA MASSIVA (BATCH) ===")
 
-# 1. Verifichiamo se esiste il file di metadati corrente o se dobbiamo automatizzare l'estrazione
-metadata_path = "highlights_metadata.json"
-if not os.path.exists(metadata_path):
-    print("Errore: Highlights metadata non trovato. Esegui prima la generazione dei metadati singoli.")
+# 1. Carichiamo gli eventi filtrati direttamente da highlight_events.csv
+csv_path = Path("highlight_events.csv")
+if not csv_path.exists():
+    print("Errore: highlight_events.csv non trovato. Esegui prima build_match_events.py.")
     exit()
 
-with open(metadata_path, "r", encoding="utf-8") as f:
-    highlights = json.load(f)
+df_highlights = pd.read_csv(csv_path)
 
-print(f"Trovati {len(highlights)} eventi nei metadati da elaborare.")
+# Convertiamo il DataFrame in una lista di dizionari per il taglio video
+highlights = []
+for idx, row in df_highlights.iterrows():
+    event_time = float(row["time"]) if not pd.isna(row["time"]) else 0.0
+    
+    # Finestra temporale del clip: 4 secondi prima dell'evento, 3 secondi dopo
+    start_time = max(0.0, event_time - 4.0)
+    end_time = event_time + 3.0
+    
+    highlights.append({
+        "id": idx + 1,
+        "type": row["type"],
+        "player": row["player"] if not pd.isna(row["player"]) else "Unknown",
+        "clip_start_time": start_time,
+        "clip_end_time": end_time
+    })
+
+print(f"Trovati {len(highlights)} eventi filtrati in highlight_events.csv da elaborare.")
 
 # 2. Cerchiamo tutti i video di OBS disponibili nella cartella
 if not OBS_DIR.exists():
@@ -75,7 +92,7 @@ for idx, video_path in enumerate(video_files, start=1):
     for h in highlights:
         h_id = h["id"]
         h_type = h["type"].upper()
-        player = h["player"]
+        player = str(h["player"]).replace(" ", "_")
         start = h["clip_start_time"]
         end = h["clip_end_time"]
         
