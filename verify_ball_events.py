@@ -1,14 +1,21 @@
+import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-JSON_PATH = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Verifica gli eventi e la telemetria della palla.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
+
+JSON_PATH = Path(args.json_path)
+print(f"🔍 Verifica eventi palla basata su: {JSON_PATH}")
 
 with JSON_PATH.open("r", encoding="utf-8") as f:
     replay = json.load(f)
@@ -74,7 +81,6 @@ print("\n========== CONTROLLO 2: TOCCHI ==========")
 
 hits = ball[ball["is_hit_update"]].copy()
 
-# Ultima posizione nota di ogni auto, frame per frame.
 cars = cars.sort_values(["pri", "frame"])
 frames_all = np.arange(cars["frame"].min(), cars["frame"].max() + 1)
 pos = {}
@@ -118,11 +124,6 @@ print(f"Tocchi analizzati: {len(res)}")
 print(f"Team coincidente col più vicino: {int(res['team_coincide'].sum())}")
 print(f"Distanza mediana: {res['distanza'].median()}")
 print(f"Distanza massima: {res['distanza'].max()}")
-print("\nTocchi dove il team NON coincide o la distanza è > 400:")
-print(
-    res[(res["team_coincide"] != True) | (res["distanza"] > 400)]
-    .to_string(index=False)
-)
 
 # ---------------------------------------------------------------
 # CONTROLLO 3: eventi TimelineKeyframes vs posizione palla.

@@ -1,22 +1,24 @@
-
+import argparse
 import json
 from pathlib import Path
 
-json_path = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Ispeziona le associazioni auto-giocatore.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
+json_path = Path(args.json_path)
 
 with json_path.open("r", encoding="utf-8") as f:
     data = json.load(f)
 
-# Manteniamo l'ultimo stato degli attori.
 actors = {}
 
 for frame in data["Frames"]:
     for actor in frame.get("ActorUpdates", []):
-
         channel = actor.get("ChannelId")
         state = actor.get("State")
 
@@ -36,18 +38,13 @@ for frame in data["Frames"]:
                 actor.get("ActorData", {})
             )
 
-# Indicizza gli attori in base al Channel ID.
 print("\n========== CAR → PLAYER ==========")
 
 for channel, actor in actors.items():
-
     if actor["object"] != "TAGame.Car_TA":
         continue
 
-    pri = actor["data"].get(
-        "PlayerReplicationInfo", {}
-    )
-
+    pri = actor["data"].get("PlayerReplicationInfo", {})
     pri_target = pri.get("TargetIndex")
 
     print(
@@ -56,14 +53,9 @@ for channel, actor in actors.items():
         f"\nPRI TargetIndex: {pri_target}"
     )
 
-    # Cerca gli attori PRI.
     for pri_channel, pri_actor in actors.items():
-
         if pri_actor["object"] != "TAGame.PRI_TA":
             continue
-
-        # Mostriamo i dati per individuare
-        # il collegamento corretto.
         print(
             f"  PRI Channel: {pri_channel}"
             f"\n  PRI Name: {pri_actor['name']}"

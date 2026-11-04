@@ -1,19 +1,25 @@
+import argparse
 import csv
 import json
 from pathlib import Path
 
-JSON_PATH = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Esporta la telemetria della palla dal JSON del replay.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
+
+JSON_PATH = Path(args.json_path)
 OUTPUT_PATH = Path("ball_telemetry.csv")
+
+print(f"⚽ Lettura file JSON per telemetria palla: {JSON_PATH}")
 
 with JSON_PATH.open("r", encoding="utf-8") as f:
     replay = json.load(f)
 
-# channel -> stato corrente della palla (il channel può cambiare
-# dopo ogni gol, quando la palla viene chiusa e riaperta).
 balls = {}
 rows = []
 
@@ -52,7 +58,6 @@ for frame_number, frame in enumerate(replay["Frames"]):
             ball["x"] = pos.get("X", ball["x"])
             ball["y"] = pos.get("Y", ball["y"])
             ball["z"] = pos.get("Z", ball["z"])
-            # Se la palla è ferma (Sleeping) non c'è velocità: la azzeriamo.
             ball["vx"] = vel.get("X", 0 if rb.get("Sleeping") else ball["vx"])
             ball["vy"] = vel.get("Y", 0 if rb.get("Sleeping") else ball["vy"])
             ball["vz"] = vel.get("Z", 0 if rb.get("Sleeping") else ball["vz"])
@@ -77,6 +82,4 @@ with OUTPUT_PATH.open("w", newline="", encoding="utf-8") as f:
     writer.writerows(rows)
 
 print(f"Esportate {len(rows)} righe.")
-print(f"Channel palla usati: {sorted({r['channel'] for r in rows})}")
-print(f"Aggiornamenti di tocco (HitTeamNum): {sum(r['is_hit_update'] for r in rows)}")
 print(f"File: {OUTPUT_PATH}")

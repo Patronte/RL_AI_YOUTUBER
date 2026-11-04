@@ -1,20 +1,24 @@
+import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-JSON_PATH = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Riffinisce i tocchi della palla.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
 
-# Finestra (in frame) attorno all'aggiornamento HitTeamNum
-# in cui cerchiamo l'impatto reale (cambio di velocità della palla).
+JSON_PATH = Path(args.json_path)
+print(f"🎯 Raffinamento tocchi basato su: {JSON_PATH}")
+
 WINDOW_BEFORE = 8
 WINDOW_AFTER = 3
-# Sopra questa distanza l'attribuzione è considerata incerta.
 MAX_TOUCH_DISTANCE = 300
 
 with JSON_PATH.open("r", encoding="utf-8") as f:
@@ -23,7 +27,6 @@ with JSON_PATH.open("r", encoding="utf-8") as f:
 players = replay["Properties"]["PlayerStats"]
 name_team = {p["Name"]: p["Team"] for p in players}
 
-# Mappa PRI -> nome (attori TAGame.PRI_TA).
 actors, pri_names = {}, {}
 for frame in replay["Frames"]:
     for u in frame.get("ActorUpdates", []):
@@ -44,14 +47,12 @@ ball = pd.read_csv("ball_telemetry.csv")
 cars = pd.read_csv("car_telemetry.csv")
 cars = cars[cars["pri"] != -1].copy()
 
-# Posizione delle auto frame per frame (ultimo valore noto).
 frames_all = np.arange(cars["frame"].min(), cars["frame"].max() + 1)
 car_pos = {}
 for pri, p in cars.sort_values(["pri", "frame"]).groupby("pri"):
     p = p.drop_duplicates("frame", keep="last").set_index("frame")
     car_pos[pri] = p[["x", "y", "z"]].reindex(frames_all).ffill()
 
-# Palla: una riga per frame, con variazione di velocità.
 phys = ball[ball["is_physics_update"]].drop_duplicates(
     "frame", keep="last"
 ).set_index("frame")
@@ -118,19 +119,6 @@ res = pd.DataFrame(rows)
 
 print("\n========== TOCCHI ATTRIBUITI ==========")
 print(f"Tocchi totali: {len(res)}")
-print(f"Affidabili (distanza <= {MAX_TOUCH_DISTANCE}): {int(res['reliable'].sum())}")
-print(f"Distanza mediana: {res['dist'].median()}")
-print(f"Distanza massima: {res['dist'].max()}")
-
-amb = res[(res["opponent_dist"] < res["dist"]) & res["reliable"]]
-print(f"Affidabili ma con un avversario più vicino: {len(amb)}")
-
-print("\n========== TOCCHI PER GIOCATORE ==========")
-print(res.groupby("player").size().to_string())
-
-print("\n========== TOCCHI NON AFFIDABILI ==========")
-print(res[~res["reliable"]].to_string(index=False))
-
 res.to_csv("ball_touches.csv", index=False)
 print("\nFile creato: ball_touches.csv")
 print("========== COMPLETATO ==========")

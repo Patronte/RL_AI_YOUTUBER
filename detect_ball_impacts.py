@@ -1,28 +1,34 @@
+import argparse
 import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-JSON_PATH = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Rileva gli impatti sulla palla.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
 
-GRAVITY_Z = -650.0          # unità/s^2 (gravità di Rocket League)
-MIN_VELOCITY_CHANGE = 150.0 # variazione di velocità (oltre la gravità) per un impatto
-MAX_CAR_DISTANCE = 250.0    # distanza massima auto-palla per attribuire il tocco
-MAX_FRAME_GAP = 3           # ignora salti fra aggiornamenti fisici troppo lunghi
-MERGE_FRAMES = 4            # impatti vicini nel tempo contano come uno solo
-HIT_LAG_FRAMES = 45         # finestra in cui cerchiamo HitTeamNum dopo l'impatto
+JSON_PATH = Path(args.json_path)
+print(f"💥 Analisi impatti palla basata su: {JSON_PATH}")
+
+GRAVITY_Z = -650.0          
+MIN_VELOCITY_CHANGE = 150.0 
+MAX_CAR_DISTANCE = 250.0    
+MAX_FRAME_GAP = 3           
+MERGE_FRAMES = 4            
+HIT_LAG_FRAMES = 45         
 
 with JSON_PATH.open("r", encoding="utf-8") as f:
     replay = json.load(f)
 
 name_team = {p["Name"]: p["Team"] for p in replay["Properties"]["PlayerStats"]}
 
-# Mappa PRI -> nome (attori TAGame.PRI_TA).
 actors, pri_names = {}, {}
 for frame in replay["Frames"]:
     for u in frame.get("ActorUpdates", []):
@@ -42,14 +48,12 @@ ball = pd.read_csv("ball_telemetry.csv")
 cars = pd.read_csv("car_telemetry.csv")
 cars = cars[cars["pri"] != -1].copy()
 
-# Posizioni auto frame per frame (ultimo valore noto).
 frames_all = np.arange(cars["frame"].min(), cars["frame"].max() + 1)
 car_pos = {}
 for pri, p in cars.sort_values(["pri", "frame"]).groupby("pri"):
     p = p.drop_duplicates("frame", keep="last").set_index("frame")
     car_pos[pri] = p[["x", "y", "z"]].reindex(frames_all).ffill()
 
-# Palla: un campione per frame, solo aggiornamenti fisici.
 phys = (
     ball[ball["is_physics_update"]]
     .drop_duplicates("frame", keep="last")
@@ -58,7 +62,6 @@ phys = (
     .reset_index(drop=True)
 )
 
-# Variazione di velocità attesa = solo gravità. Il resto è un impatto.
 same_ball = phys["channel"] == phys["channel"].shift()
 dt = phys["time"].diff()
 exp_vz = phys["vz"].shift() + GRAVITY_Z * dt
@@ -92,7 +95,7 @@ for _, row in candidates.iterrows():
         continue
     pri = min(dists, key=dists.get)
     if dists[pri] > MAX_CAR_DISTANCE:
-        continue  # rimbalzo su muro/pavimento senza auto vicine
+        continue  
     impacts.append(
         {
             "frame": f,
@@ -111,7 +114,6 @@ for _, row in candidates.iterrows():
 
 imp = pd.DataFrame(impacts)
 
-# Unisce impatti consecutivi dello stesso giocatore (un tocco = più frame).
 merged = []
 for _, r in imp.iterrows():
     if (
@@ -129,7 +131,6 @@ for _, r in imp.iterrows():
     merged.append(d)
 imp = pd.DataFrame(merged)
 
-# Controllo di coerenza con HitTeamNum.
 hits = ball[ball["is_hit_update"]][["frame", "hit_team"]].reset_index(drop=True)
 checks = []
 for _, r in imp.iterrows():
@@ -143,23 +144,6 @@ imp["hit_team_check"] = checks
 
 print("\n========== IMPATTI RILEVATI ==========")
 print(f"Impatti (dopo unione): {len(imp)}")
-print(f"HitTeamNum coerente: {sum(1 for c in checks if c is True)}")
-print(f"HitTeamNum NON coerente: {sum(1 for c in checks if c is False)}")
-print(f"Senza HitTeamNum associato: {sum(1 for c in checks if c is None)}")
-
-print("\n========== IMPATTI PER GIOCATORE ==========")
-print(imp.groupby("player").size().to_string())
-
-print("\n========== VARIAZIONE DI VELOCITÀ ==========")
-print(imp["velocity_change"].describe().round(1).to_string())
-
-print("\n========== IMPATTI NON COERENTI CON HitTeamNum ==========")
-bad = imp[imp["hit_team_check"] == False]
-print(
-    bad[["frame", "player", "team", "distance", "velocity_change"]]
-    .to_string(index=False)
-)
-
 imp.to_csv("ball_impacts.csv", index=False)
 print("\nFile creato: ball_impacts.csv")
 print("========== COMPLETATO ==========")

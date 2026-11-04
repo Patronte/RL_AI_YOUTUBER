@@ -1,22 +1,24 @@
-
+import argparse
 import json
 from pathlib import Path
 
-json_path = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+parser = argparse.ArgumentParser(description="Ispeziona i riferimenti degli attori.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
+json_path = Path(args.json_path)
 
 with json_path.open("r", encoding="utf-8") as f:
     data = json.load(f)
 
-# Indice degli attori aperti.
 actors = {}
 
 for frame in data["Frames"]:
     for actor in frame.get("ActorUpdates", []):
-
         channel = actor.get("ChannelId")
         state = actor.get("State")
 
@@ -38,22 +40,16 @@ for frame in data["Frames"]:
             )
 
 print("\n========== CAR ACTORS ==========")
-
 cars = {}
 
 for channel, actor in actors.items():
     if actor["object"] == "TAGame.Car_TA":
         cars[channel] = actor
-        print(
-            f"Channel={channel} "
-            f"Name={actor['name']} "
-            f"Target={actor['target']}"
-        )
+        print(f"Channel={channel} Name={actor['name']} Target={actor['target']}")
 
 print("\n========== COMPONENT REFERENCES ==========")
 
 for channel, actor in actors.items():
-
     if actor["object"] not in [
         "TAGame.CarComponent_Jump_TA",
         "TAGame.CarComponent_DoubleJump_TA",
@@ -63,14 +59,13 @@ for channel, actor in actors.items():
         continue
 
     vehicle = actor["data"].get("Vehicle", {})
-
     target = vehicle.get("TargetIndex")
 
     matching_cars = [
-    (car_channel, car)
-    for car_channel, car in cars.items()
-    if car_channel == target
-]
+        (car_channel, car)
+        for car_channel, car in cars.items()
+        if car_channel == target
+    ]
 
     print(
         f"\nComponent Channel={channel}"

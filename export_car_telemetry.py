@@ -1,13 +1,20 @@
-
-import json
+import argparse
 import csv
+import json
 from pathlib import Path
 
-path = (
-    Path("parsed")
-    / "rocketrp_test"
-    / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"
+# Configurazione argomenti da riga di comando
+parser = argparse.ArgumentParser(description="Esporta la telemetria delle auto dal JSON del replay.")
+parser.add_argument(
+    "--json_path", 
+    type=str, 
+    default=str(Path("parsed") / "rocketrp_test" / "3D37EE4411F1D7AB02548DB2DDA89CDC.json"),
+    help="Percorso al file JSON del match da analizzare."
 )
+args = parser.parse_args()
+
+path = Path(args.json_path)
+print(f"🚗 Lettura file JSON per telemetria auto: {path}")
 
 with path.open("r", encoding="utf-8") as f:
     replay = json.load(f)
