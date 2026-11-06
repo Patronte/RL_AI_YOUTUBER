@@ -1,73 +1,157 @@
 import pandas as pd
+import json
+import argparse
 from pathlib import Path
 
-print("=== AVVIO RANKING INTELLIGENTE CON DEDUPLICATION ===")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Rank highlights with causal chain and strict team filtering.")
+    parser.add_argument("--username", type=str, default="Patrontex", help="Il tuo nickname in-game")
+    parser.add_argument("--json_path", type=str, default="", help="Percorso al file JSON del replay")
+    return parser.parse_known_args()
 
-csv_path = Path("highlight_events.csv")
-if not csv_path.exists():
-    print("Errore: highlight_events.csv non trovato.")
-    exit()
-
-df = pd.read_csv(csv_path)
-print(f"Eventi totali letti nel CSV: {len(df)}")
-
-# 1. Filtraggio base (escludiamo variazioni di velocità irrilevanti se presenti)
-if "dv" in df.columns:
-    filtered = df[df["dv"] >= 1000.0].copy()
-else:
-    filtered = df.copy()
-
-# 2. Assegniamo un punteggio di spettacolarità
-def calculate_score(row):
-    score = row.get("dv", 1000.0)
-    # Diamo un bonus extra se nel tipo evento c'è GOAL o SAVE
-    event_type = str(row.get("type", "")).upper()
-    if "GOAL" in event_type:
-        score += 3000.0
-    elif "SAVE" in event_type:
-        score += 1500.0
-    elif "SHOT" in event_type:
-        score += 800.0
-    return score
-
-filtered["score"] = filtered.apply(calculate_score, axis=1)
-
-# Ordiniamo per punteggio decrescente
-filtered = filtered.sort_values(by="score", ascending=False).reset_index(drop=True)
-
-# 3. FILTRO ANTI-CLONI / DEDUPLICATION TEMPORALE
-# Rocket League gira a 60 fps. 5 secondi = circa 300 frame.
-# Se due eventi avvengono a meno di 300 frame di distanza, evitiamo di prenderli entrambi.
-MIN_FRAME_DISTANCE = 300 
-selected_highlights = []
-
-for _, row in filtered.iterrows():
-    frame_col = "impact_frame" if "impact_frame" in row else "frame"
-    curr_frame = row[frame_col]
-    
-    # Controlliamo se è troppo vicino a un evento già selezionato
-    too_close = False
-    for selected in selected_highlights:
-        sel_frame = selected[frame_col]
-        if abs(curr_frame - sel_frame) < MIN_FRAME_DISTANCE:
-            too_close = False # Mettiamo True per scartarli, ma se vogliamo raggrupparli gestiamo così:
-            too_close = True
-            break
-            
-    if not too_close:
-        selected_highlights.append(row)
+def get_my_team_and_teammates(json_path, username):
+    """Estrae il team index (0 o 1) e i nomi di tutti i compagni di squadra dal JSON."""
+    if not json_path or not Path(json_path).exists():
+        return None, []
+    try:
+        with open(json_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
         
-    if len(selected_highlights) >= 10: # Vogliamo i top 10 ben distribuiti
-        exit_loop = True
+        properties = data.get("properties", {})
+        player_stats = properties.get("PlayerStats", [])
+        
+        my_team = None
+        for p in player_stats:
+            p_name = p.get("Name", "")
+            if p_name.lower() == username.lower():
+                my_team = p.get("Team", p.get("TeamNum", None))
+                break
 
-top_highlights = pd.DataFrame(selected_highlights)
+        if my_team is None:
+            return None, []
 
-# Riordiniamo cronologicamente per il montaggio video finale
-frame_col = "impact_frame" if "impact_frame" in top_highlights.columns else "frame"
-top_highlights = top_highlights.sort_values(by=frame_col).reset_index(drop=True)
+        teammates = [
+            p.get("Name") for p in player_stats 
+            if p.get("Team", p.get("TeamNum", None)) == my_team and p.get("Name")
+        ]
+        return my_team, teammates
+    except Exception as e:
+        print(f"⚠️ Errore lettura team da JSON: {e}")
+        return None, []
 
-output_path = Path("top_highlights_ranked.csv")
-top_highlights.to_csv(output_path, index=False)
+def find_causal_start_time(events_df, event_time, player_name, teammates, max_lookback=12.0):
+    """
+    True Start a Catena Causale:
+    Risale a ritroso nel CSV degli eventi/tocchi fino a trovare il primo tocco utile 
+    della squadra (o intercettazione) che ha dato origine all'azione.
+    """
+    if "time" not in events_df.columns:
+        return max(0.0, event_time - 5.0)
 
-print(f"\nSelezionati i Top {len(top_highlights)} momenti unici e distanziati nel match.")
-print(top_highlights[[frame_col, "player", "score"]].to_string(index=False))
+    # Eventi/tocchi precedenti all'evento clou entro una finestra massima di lookback
+    prior_events = events_df[
+        (events_df["time"] <= event_time) & 
+        (events_df["time"] >= max(0.0, event_time - max_lookback))
+    ].sort_values(by="time", ascending=False)
+
+    if prior_events.empty:
+        return max(0.0, event_time - 5.0)
+
+    chain_start = event_time - 3.0  # Fallback minimo per contestualizzare
+    last_valid_time = event_time
+
+    for _, row in prior_events.iterrows():
+        p = str(row.get("player", ""))
+        t = float(row.get("time", 0.0))
+        
+        # Interruzione catena se c'è una pausa di gioco troppo lunga (>4.5s senza tocchi)
+        if (last_valid_time - t) > 4.5:
+            break
+
+        # Se il tocco appartiene alla squadra o è un tocco chiave correlato
+        if any(mate.lower() in p.lower() for mate in teammates) or p == player_name:
+            chain_start = t
+            last_valid_time = t
+        else:
+            # Tocco avversario: se è vicino all'azione (es. rimpallo o parata subita), lo includiamo ma non estendiamo a ritroso oltre
+            chain_start = min(chain_start, t)
+            break
+
+    # Margine di respiro pre-azione (1.5s prima del tocco iniziale)
+    return max(0.0, chain_start - 1.5)
+
+def main():
+    args, _ = parse_args()
+    username = args.username
+    json_path = args.json_path
+
+    print("=== RANKING INTELLIGENTE: CATENA CAUSALE & FILTRO RIGOROSO SQUADRA ===")
+    
+    events_file = Path("highlight_events.csv")
+    if not events_file.exists():
+        events_file = Path("match_events.csv")
+        if not events_file.exists():
+            print("❌ Nessun file di eventi trovato per il ranking.")
+            return
+
+    df_events = pd.read_csv(events_file)
+    touches_file = Path("ball_touches.csv")
+    df_touches = pd.read_csv(touches_file) if touches_file.exists() else df_events
+
+    my_team, teammates = get_my_team_and_teammates(json_path, username)
+
+    # Filtro di squadra rigoroso: manteniamo gli eventi dove il protagonista o chi subisce l'azione è del tuo team
+    if teammates:
+        pattern = "|".join([re_escape(m) for m in teammates])
+        df_filtered = df_events[df_events["player"].astype(str).str.contains(pattern, case=False, na=False)].copy()
+        if not df_filtered.empty:
+            df_events = df_filtered
+            print(f"🛡️ Filtro squadra applicato con successo. Compagni: {teammates}")
+        else:
+            print("⚠️ Nessun evento trovato esclusivamente per il team, uso eventi generali.")
+
+    if 'score' not in df_events.columns:
+        df_events['score'] = 1000.0
+
+    df_events = df_events.sort_values(by="score", ascending=False)
+    
+    selected_highlights = []
+    min_time_gap = 8.0
+
+    for _, row in df_events.iterrows():
+        event_t = float(row.get("time", 0.0))
+        p_name = str(row.get("player", username))
+        
+        if all(abs(event_t - h["event_time"]) >= min_time_gap for h in selected_highlights):
+            # Calcolo dinamico del True Start tramite la Catena Causale
+            start_t = find_causal_start_time(df_touches, event_t, p_name, teammates)
+            # Fine azione: +3.5s per celebrazione/esplosione gol
+            end_t = event_t + 3.5
+
+            selected_highlights.append({
+                "time": event_t,
+                "event_time": event_t,
+                "start_time": start_t,
+                "end_time": end_t,
+                "type": row.get("type", "highlight"),
+                "player": p_name,
+                "score": row.get("score", 1000.0)
+            })
+
+            if len(selected_highlights) >= 15:
+                break
+
+    df_ranked = pd.DataFrame(selected_highlights).sort_values(by="start_time")
+
+    print(f"\nSelezionati i Top {len(df_ranked)} momenti con durata e start dinamici.")
+    print(df_ranked[['start_time', 'event_time', 'end_time', 'player', 'type']].to_string(index=False))
+
+    df_ranked.to_csv("top_highlights_ranked.csv", index=False)
+    print("✅ Ranking Highlights con Catena Causale completato.")
+
+def re_escape(text):
+    import re
+    return re.escape(text)
+
+if __name__ == "__main__":
+    main()
