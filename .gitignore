@@ -31,6 +31,9 @@ data/parsed/
 data/matches/
 data/analytics/
 
+# Specific ignores for parsed batch archive (ignore .json files)
+parsed/batch_archive/**/*.json
+
 # Generated videos and thumbnails
 output/
 
